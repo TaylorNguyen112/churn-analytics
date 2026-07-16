@@ -1,0 +1,36 @@
+name: 'churn_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'churn_analytics'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Medallion layout in the `workspace` catalog:
+#   bronze  (sources)     -> silver (staging + intermediate) -> gold (marts)
+# Schema routing is handled by macros/generate_schema_name.sql so that
+# `+schema: silver` produces `workspace.silver` (not `workspace.silver_silver`).
+models:
+  churn_analytics:
+    staging:
+      +materialized: view
+      +schema: silver
+      +tags: ["silver", "staging"]
+    intermediate:
+      +materialized: view
+      +schema: silver
+      +tags: ["silver", "intermediate"]
+    marts:
+      +schema: gold
+      core:
+        +materialized: table
+        +tags: ["gold", "core"]

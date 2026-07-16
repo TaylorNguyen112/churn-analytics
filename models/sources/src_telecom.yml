@@ -1,0 +1,86 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: |
+      Raw ingested Delta tables landing in the Bronze layer of Unity Catalog.
+      Bronze is treated as an append-only, unmodified copy of source data;
+      cleaning and typing happen downstream in the Silver staging models.
+    catalog: "{{ env_var('DBT_CATALOG', 'workspace') }}"
+    schema: "{{ env_var('DBT_BRONZE_SCHEMA', 'bronze') }}"
+
+    # Freshness deliberately omitted: Bronze is a batch-loaded, snapshot
+    # dataset in this project (all rows share the same etl_ingested_at).
+    # Enable per-table freshness once a real ingestion SLA is defined,
+    # e.g.:
+    #   loaded_at_field: etl_ingested_at
+    #   freshness:
+    #     warn_after: {count: 24, period: hour}
+    #     error_after: {count: 72, period: hour}
+
+    tables:
+
+      - name: telecom_customer_churn
+        description: |
+          One row per customer with demographics, subscribed services,
+          contract terms, financial totals, and churn label / reason.
+          Column names use Title Case with spaces and must be quoted with
+          backticks. No source `updated_at` column is present.
+        columns:
+          - name: "`Customer ID`"
+            description: Business key for a customer.
+            data_tests:
+              - not_null
+          - name: "`Zip Code`"
+            description: Five-digit US ZIP stored as INT in Bronze.
+            data_tests:
+              - not_null
+
+      - name: telecom_zipcode_population
+        description: One row per US ZIP code with population.
+        columns:
+          - name: "`Zip Code`"
+            description: Five-digit US ZIP stored as INT in Bronze.
+            data_tests:
+              - not_null
+          - name: Population
+            description: Total population for the ZIP code.
+
+      - name: customer_monthly_snapshot
+        description: |
+          One row per (customer, month) capturing billing, revenue, and
+          status. Includes source-level ingestion metadata (`batch_id`,
+          `source_system`, `updated_at`) in addition to `etl_*` fields.
+        columns:
+          - name: monthly_snapshot_id
+            description: "Business key: customer_id + YYYYMM."
+            data_tests:
+              - not_null
+          - name: customer_id
+            description: Foreign key to the customer master.
+            data_tests:
+              - not_null
+          - name: snapshot_month
+            description: Snapshot month, always first day of month (DATE).
+            data_tests:
+              - not_null
+          - name: updated_at
+            description: Source update timestamp used for downstream dedup ordering.
+
+      - name: customer_support_events
+        description: |
+          One row per support event captured by the CRM system. Populated
+          for every customer interaction (calls, chats, escalations).
+        columns:
+          - name: support_event_id
+            description: Business key for a support event.
+            data_tests:
+              - not_null
+          - name: customer_id
+            description: Foreign key to the customer master.
+            data_tests:
+              - not_null
+          - name: event_timestamp
+            description: When the support event occurred (TIMESTAMP).
+          - name: updated_at
+            description: Source update timestamp used for downstream dedup ordering.

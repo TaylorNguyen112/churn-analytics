@@ -1,0 +1,179 @@
+version: 2
+
+models:
+
+  # ---------------------------------------------------------------------
+  - name: int_customer_profile
+    description: |
+      One row per customer with demographics, tenure, ZIP, and a derived
+      `first_join_month` (estimate = latest_snapshot_month -
+      (tenure_months - 1) months). Reusable customer entity for dim_customer
+      and for enrichment in facts.
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique
+      - name: age_band
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Unknown', '18-29', '30-44', '45-59', '60+']
+      - name: current_tenure_band
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Unknown', '0-6 months', '7-12 months', '13-24 months', '25-48 months', '49+ months']
+      - name: zip_code
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('int_zipcode_geography')
+                field: zip_code
+
+  # ---------------------------------------------------------------------
+  - name: int_customer_service_profile
+    description: |
+      One row per customer with the current service configuration and
+      derived bundle flags. Includes a stable `service_profile_key`
+      surrogate over the 14 natural service attributes; the same
+      generate_surrogate_key expression is used in dim_service_profile
+      so keys reconcile automatically.
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique
+      - name: service_profile_key
+        data_tests:
+          - not_null
+
+  # ---------------------------------------------------------------------
+  - name: int_customer_financial
+    description: |
+      One row per customer with current-state financials, revenue
+      reconciliation, and average monthly revenue. Preserves negative
+      values (source anomalies) and exposes validity flags.
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique
+
+  # ---------------------------------------------------------------------
+  - name: int_customer_churn_status
+    description: |
+      One row per customer with the current churn status, mutually
+      consistent flags, and monthly revenue attributed to loss.
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Stayed', 'Churned', 'Joined']
+
+  # ---------------------------------------------------------------------
+  - name: int_zipcode_geography
+    description: |
+      One row per zip_code. Combines the ZIP population reference with
+      city / latitude / longitude aggregated deterministically from the
+      customer table (validated 1:1 in profiling). `state` and `region`
+      are NULL because no source provides them.
+    columns:
+      - name: zip_code
+        data_tests:
+          - not_null
+          - unique
+      - name: population
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+
+  # ---------------------------------------------------------------------
+  - name: int_customer_monthly_360
+    description: |
+      One row per (customer_id, snapshot_month). Central historical
+      business entity. Historical status/contract/internet come from the
+      snapshot itself; service booleans come from the customer profile
+      (see model header for rationale).
+    columns:
+      - name: monthly_snapshot_id
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('int_customer_profile')
+                field: customer_id
+      - name: snapshot_month
+        data_tests:
+          - not_null
+      - name: customer_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Stayed', 'Churned', 'Joined']
+      - name: customer_count
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [1]
+                quote: false
+      - name: eligible_customer_count
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+                quote: false
+      - name: churned_customer_count
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+                quote: false
+      - name: data_quality_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['VALID', 'MISSING_CUSTOMER_ID', 'INVALID_SNAPSHOT_MONTH', 'INVALID_MONTHLY_CHARGE', 'MISSING_ZIP_CODE']
+
+  # ---------------------------------------------------------------------
+  - name: int_support_event_enriched
+    description: |
+      One row per support_event_id enriched with the customer context
+      that applied in the event's calendar month.
+    columns:
+      - name: support_event_id
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('int_customer_profile')
+                field: customer_id
+      - name: event_timestamp
+        data_tests:
+          - not_null
+      - name: satisfaction_score
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+                max_value: 5
+                inclusive: true
+              config:
+                where: "satisfaction_score is not null"

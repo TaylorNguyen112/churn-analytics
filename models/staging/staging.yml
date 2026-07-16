@@ -1,0 +1,315 @@
+version: 2
+
+models:
+
+  # ---------------------------------------------------------------------
+  - name: stg_telecom_customer_churn
+    description: |
+      One row per current customer. Types are enforced (integers, decimals,
+      booleans), Yes/No columns are converted via `yes_no_to_boolean`,
+      blank strings are converted to NULL, and ZIP code is standardized to
+      a 5-character string. Negative monthly charges are preserved and
+      flagged. Revenue-reconciliation flag is included; profiling shows
+      all rows currently reconcile within 0.01.
+    columns:
+      - name: customer_id
+        description: Business key for a customer.
+        data_tests:
+          - not_null
+          - unique
+      - name: gender
+        description: Customer gender as reported in the source.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Male', 'Female']
+              config:
+                severity: warn
+      - name: age
+      - name: is_married
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: zip_code
+        description: Five-character US ZIP.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_telecom_zipcode_population')
+                field: zip_code
+      - name: number_of_dependents
+      - name: number_of_referrals
+      - name: tenure_months
+      - name: offer
+        description: Marketing offer. Literal string "None" is retained (not NULL).
+      - name: has_phone_service
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_multiple_lines
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_internet_service
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: internet_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Fiber Optic', 'DSL', 'Cable']
+              config:
+                severity: warn
+      - name: has_online_security
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_online_backup
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_device_protection_plan
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_premium_tech_support
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_streaming_tv
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_streaming_movies
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_streaming_music
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_unlimited_data
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: contract
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Month-to-Month', 'One Year', 'Two Year']
+      - name: is_paperless_billing
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: payment_method
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Bank Withdrawal', 'Credit Card', 'Mailed Check']
+      - name: monthly_charge
+        description: Current monthly charge (decimal 18,2). Negative values retained; see is_monthly_charge_valid.
+      - name: total_charges
+      - name: total_refunds
+      - name: total_extra_data_charges
+      - name: total_long_distance_charges
+      - name: total_revenue
+      - name: calculated_total_revenue
+      - name: is_total_revenue_reconciled
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: is_monthly_charge_valid
+      - name: customer_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Stayed', 'Churned', 'Joined']
+      - name: churn_category
+        description: NULL for non-churned customers.
+      - name: churn_reason
+        description: NULL for non-churned customers.
+      - name: etl_ingested_at
+        description: Bronze ingestion timestamp used as dedup ordering key.
+        data_tests:
+          - not_null
+
+  # ---------------------------------------------------------------------
+  - name: stg_telecom_zipcode_population
+    description: One row per US ZIP code with population. ZIP stored as 5-char string.
+    columns:
+      - name: zip_code
+        data_tests:
+          - not_null
+          - unique
+      - name: population
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: is_population_valid
+
+  # ---------------------------------------------------------------------
+  - name: stg_customer_monthly_snapshot
+    description: |
+      One row per (customer, month). monthly_snapshot_id is the source
+      business key and is guaranteed unique.
+    columns:
+      - name: monthly_snapshot_id
+        description: "Source business key: customer_id + YYYYMM."
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_telecom_customer_churn')
+                field: customer_id
+      - name: snapshot_month
+        data_tests:
+          - not_null
+      - name: tenure_months
+      - name: contract_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Month-to-Month', 'One Year', 'Two Year']
+              config:
+                severity: warn
+      - name: internet_type
+      - name: monthly_charge
+      - name: monthly_revenue
+      - name: total_revenue
+      - name: is_monthly_charge_valid
+      - name: customer_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Stayed', 'Churned', 'Joined']
+      - name: is_churned
+      - name: is_stayed
+      - name: is_new_customer
+      - name: is_churn_eligible
+      - name: source_updated_at
+        data_tests:
+          - not_null
+      - name: etl_ingested_at
+        data_tests:
+          - not_null
+
+  # ---------------------------------------------------------------------
+  - name: stg_customer_support_events
+    description: |
+      One row per support event. Preserves NULL resolution_hours and
+      satisfaction_score for `Pending` events. Terminal statuses always
+      have both populated, per source profiling.
+    columns:
+      - name: support_event_id
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_telecom_customer_churn')
+                field: customer_id
+      - name: event_timestamp
+        data_tests:
+          - not_null
+      - name: issue_category
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'Billing & Payment'
+                  - 'Account & Contract'
+                  - 'Internet Connectivity'
+                  - 'Slow Internet'
+                  - 'Device Setup'
+                  - 'Phone Service'
+                  - 'Cancellation Request'
+                  - 'Service Outage'
+                  - 'Other'
+                  - 'Competitor Offer'
+                  - 'Service Complaint'
+                  - 'Pricing Complaint'
+              config:
+                severity: warn
+      - name: channel
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Chat', 'Phone', 'Email', 'Self-Service']
+      - name: priority
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Critical', 'High', 'Medium', 'Low']
+      - name: resolution_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Resolved', 'Escalated', 'Closed - Unresolved', 'Pending']
+      - name: resolution_hours
+        description: NULL for Pending events; otherwise a decimal (>= 0).
+      - name: satisfaction_score
+        description: 1-5 for terminal statuses; NULL for Pending.
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+                max_value: 5
+                inclusive: true
+              config:
+                where: "satisfaction_score is not null"
+      - name: is_resolution_hours_valid
+      - name: is_satisfaction_score_valid
+      - name: is_resolved
+      - name: is_escalated
+      - name: source_updated_at
+        data_tests:
+          - not_null
+      - name: etl_ingested_at
+        data_tests:
+          - not_null
