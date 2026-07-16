@@ -3,7 +3,7 @@
 # See .env.example for the variables to set.
 # Docs: https://docs.getdbt.com/docs/core/connect-data-platform/databricks-setup
 
-databricks:
+local_databricks_cluster:
   target: dev
   outputs:
     dev:
