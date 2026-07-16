@@ -15,6 +15,14 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
+# Pin the active Unity Catalog for every dbt run.
+# Databricks Workflows' auto-generated profile has no `catalog` set, so
+# unqualified queries default to `hive_metastore` (which is disabled on
+# most Unity-Catalog-enabled workspaces). This hook makes the connection
+# switch to `workspace` before any model runs, matching local dev.
+on-run-start:
+  - "USE CATALOG {{ env_var('DBT_CATALOG', 'workspace') }}"
+
 # Medallion layout in the `workspace` catalog:
 #   bronze  (sources)     -> silver (staging + intermediate) -> gold (marts)
 # Schema routing is handled by macros/generate_schema_name.sql so that
