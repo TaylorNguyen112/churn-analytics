@@ -3,13 +3,12 @@
     --------
     Grain          : one row per calendar_date.
     Range          : 2024-01-01 through 2026-12-31 inclusive.
-                     Chosen to comfortably cover:
-                       - monthly snapshot range: 2025-01-01 .. 2025-12-01
-                       - support event range:    2025-01-01 .. 2025-12-31
-                     with a one-year buffer on either side to accommodate
-                     new loads without immediate schema changes.
-    date_key       : integer YYYYMMDD (e.g. 20250115).
-    Materialization: table (small, ~1,096 rows).
+    date_key       : integer YYYYMMDD.
+    Materialization: table (~1,096 rows).
+
+    dim_date has no upstream data source, so etl_source_system is set to
+    the sentinel 'DBT' to distinguish these rows from source-derived
+    rows in downstream monitoring.
 */
 
 with spine as (
@@ -36,7 +35,7 @@ final as (
 
         day(calendar_date)                                  as day_of_month,
         date_format(calendar_date, 'EEEE')                  as day_name,
-        dayofweek(calendar_date)                            as day_of_week,     -- 1=Sunday .. 7=Saturday
+        dayofweek(calendar_date)                            as day_of_week,
         weekofyear(calendar_date)                           as week_of_year,
 
         month(calendar_date)                                as month_number,
@@ -60,7 +59,8 @@ final as (
         (calendar_date = last_day(calendar_date))           as is_month_end,
         (dayofweek(calendar_date) in (1, 7))                as is_weekend,
 
-        current_timestamp()                                 as dbt_loaded_at
+        cast('DBT' as string)                               as etl_source_system,
+        {{ audit_columns() }}
 
     from renamed
 

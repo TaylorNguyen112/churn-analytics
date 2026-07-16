@@ -3,8 +3,6 @@
     -------------------------
     Grain    : one row per customer_id (current-state churn status).
     Source   : stg_telecom_customer_churn.
-    Purpose  : Reusable current-state churn entity + monthly revenue lost.
-
     Notes    :
       - Status flags follow the source label taxonomy exactly:
             Churned / Stayed / Joined.
@@ -12,8 +10,7 @@
         cannot yet churn or stay in the current period. Downstream
         churn-rate KPIs should use this as the denominator.
       - monthly_revenue_lost_current is only counted for churned
-        customers with a non-negative monthly_charge (negative charges
-        represent credits and are not lost revenue).
+        customers with a non-negative monthly_charge.
 */
 
 with base as (
@@ -44,8 +41,8 @@ final as (
             else cast(0 as decimal(18,2))
         end                                                 as monthly_revenue_lost_current,
 
-        etl_ingested_at        as ingested_at,
-        etl_run_id             as ingestion_batch_id
+        etl_source_system,
+        {{ audit_columns() }}
 
     from base
 

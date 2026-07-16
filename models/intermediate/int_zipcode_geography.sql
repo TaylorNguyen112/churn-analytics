@@ -3,18 +3,13 @@
     ---------------------
     Grain      : one row per zip_code.
     Sources    : stg_telecom_zipcode_population (population, 1,671 zips)
-                 stg_telecom_customer_churn (city, latitude, longitude,
-                     for 1,626 zips - subset of the population table).
-    Approach   : LEFT JOIN population <- deduplicated geography agg from
-                 the customer table. Profiling proved zip -> city and
-                 zip -> (latitude, longitude) are strict 1:1 mappings in
-                 the current data, so MIN() aggregation is deterministic
-                 (all values in each group are identical).
-
-    Fields not available in any source (documented gaps):
-      - state, region
-      A future enhancement can enrich these via a seed containing a
-      ZIP -> state/region mapping.
+                 stg_telecom_customer_churn (city / lat / long for
+                     1,626 zips - subset of the population table).
+    Approach   : LEFT JOIN population <- deduplicated geography
+                 aggregate from the customer table. Profiling proved
+                 zip -> city and zip -> (latitude, longitude) are strict
+                 1:1 mappings, so MIN() aggregation is deterministic.
+    Gaps       : state, region unavailable in any source.
 */
 
 with population as (
@@ -25,8 +20,6 @@ with population as (
 
 geography_agg as (
 
-    -- Deduplicate customer-side geography attributes to one row per zip.
-    -- Profiling confirmed exactly one distinct city / lat / long per zip.
     select
         zip_code,
         min(city)      as city,
@@ -48,11 +41,11 @@ final as (
         p.population,
         p.is_population_valid,
 
-        cast(null as string)             as state,   -- not available in source
-        cast(null as string)             as region,  -- not available in source
+        cast(null as string)             as state,
+        cast(null as string)             as region,
 
-        p.etl_ingested_at                as ingested_at,
-        p.etl_run_id                     as ingestion_batch_id
+        p.etl_source_system              as etl_source_system,
+        {{ audit_columns() }}
 
     from population p
     left join geography_agg g on g.zip_code = p.zip_code

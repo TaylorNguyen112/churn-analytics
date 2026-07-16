@@ -11,10 +11,12 @@
     Grain           : one row per customer_id (post-dedup).
     Source          : {{ source('bronze', 'telecom_customer_churn') }}
     Business key    : customer_id
-    Dedup ordering  : etl_ingested_at DESC, etl_file_row_number DESC
-                      (No source updated_at column exists on this table.
-                      In current data every etl_ingested_at is identical,
-                      so etl_file_row_number is the effective tiebreaker.)
+    Dedup ordering  : Bronze `etl_ingested_at DESC, etl_file_row_number DESC`
+                      is used INSIDE the model for row selection only.
+                      Those columns are NOT projected to the Silver output.
+                      Every silver/gold table keeps a uniform audit block:
+                      etl_source_system + etl_job_id + etl_run_id +
+                      etl_task_name + etl_updated_at.
     Data-quality
     findings kept in
     the model       :
@@ -36,10 +38,8 @@ with source as (
 renamed as (
 
     select
-        -- business key
         trim(`Customer ID`)                                         as customer_id,
 
-        -- demographics
         nullif(trim(Gender), '')                                    as gender,
         Age                                                         as age,
         {{ yes_no_to_boolean('Married') }}                          as is_married,
@@ -49,12 +49,10 @@ renamed as (
         Latitude                                                    as latitude,
         Longitude                                                   as longitude,
 
-        -- tenure / marketing
         `Number of Referrals`                                       as number_of_referrals,
         `Tenure in Months`                                          as tenure_months,
         nullif(trim(Offer), '')                                     as offer,
 
-        -- services (Yes/No -> boolean; blanks become NULL)
         {{ yes_no_to_boolean('`Phone Service`') }}                  as has_phone_service,
         try_cast(`Avg Monthly Long Distance Charges` as decimal(18,2))
                                                                     as avg_monthly_long_distance_charges,
@@ -71,12 +69,10 @@ renamed as (
         {{ yes_no_to_boolean('`Streaming Music`') }}                as has_streaming_music,
         {{ yes_no_to_boolean('`Unlimited Data`') }}                 as has_unlimited_data,
 
-        -- contract / billing
         nullif(trim(Contract), '')                                  as contract,
         {{ yes_no_to_boolean('`Paperless Billing`') }}              as is_paperless_billing,
         nullif(trim(`Payment Method`), '')                          as payment_method,
 
-        -- financial (decimal(18,2))
         try_cast(`Monthly Charge`               as decimal(18,2))   as monthly_charge,
         try_cast(`Total Charges`                as decimal(18,2))   as total_charges,
         try_cast(`Total Refunds`                as decimal(18,2))   as total_refunds,
@@ -84,19 +80,16 @@ renamed as (
         try_cast(`Total Long Distance Charges`  as decimal(18,2))   as total_long_distance_charges,
         try_cast(`Total Revenue`                as decimal(18,2))   as total_revenue,
 
-        -- status / churn
         nullif(trim(`Customer Status`), '')                         as customer_status,
         nullif(trim(`Churn Category`), '')                          as churn_category,
         nullif(trim(`Churn Reason`), '')                            as churn_reason,
 
-        -- ingestion metadata
-        etl_ingested_at                                             as etl_ingested_at,
-        etl_source_system                                           as etl_source_system,
-        etl_run_id                                                  as etl_run_id,
-        etl_job_id                                                  as etl_job_id,
-        etl_task_name                                               as etl_task_name,
-        etl_source_file                                             as etl_source_file,
-        etl_file_row_number                                         as etl_file_row_number
+        -- Kept in-model for dedup ordering only, NOT projected downstream.
+        etl_ingested_at                                             as _dedup_ingested_at,
+        etl_file_row_number                                         as _dedup_row_number,
+
+        -- Only Bronze etl column kept downstream.
+        etl_source_system                                           as etl_source_system
 
     from source
 
@@ -109,8 +102,8 @@ deduplicated as (
         row_number() over (
             partition by customer_id
             order by
-                etl_ingested_at    desc,
-                etl_file_row_number desc
+                _dedup_ingested_at desc,
+                _dedup_row_number  desc
         ) as _row_num
     from renamed r
 
@@ -160,7 +153,6 @@ final as (
         total_long_distance_charges,
         total_revenue,
 
-        -- calculated revenue and reconciliation flag
         cast(
             coalesce(total_charges, 0)
             - coalesce(total_refunds, 0)
@@ -184,10 +176,9 @@ final as (
             else false
         end as is_total_revenue_reconciled,
 
-        -- monthly charge validity (negative charges are retained)
         case
             when monthly_charge is null then null
-            when monthly_charge >= 0 then true
+            when monthly_charge >= 0    then true
             else false
         end as is_monthly_charge_valid,
 
@@ -195,13 +186,8 @@ final as (
         churn_category,
         churn_reason,
 
-        etl_ingested_at,
         etl_source_system,
-        etl_run_id,
-        etl_job_id,
-        etl_task_name,
-        etl_source_file,
-        etl_file_row_number
+        {{ audit_columns() }}
 
     from deduplicated
     where _row_num = 1

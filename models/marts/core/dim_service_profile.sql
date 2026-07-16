@@ -1,24 +1,14 @@
 /*
     dim_service_profile
     -------------------
-    Grain          : one row per unique service configuration.
-    Source         : int_customer_service_profile (DISTINCT on natural
-                     attribute set).
-    Surrogate key  : service_profile_key (already computed with
-                     dbt_utils.generate_surrogate_key over the 14 natural
-                     attributes in int_customer_service_profile).
-    Unknown member : service_profile_key = hash('UNKNOWN').
-
-    Design note:
-      Because the service_profile_key is derived deterministically in the
-      intermediate model, the fact tables can pick it up directly and
-      only need to LEFT JOIN this dim for descriptive attributes.
+    Grain          : one row per unique service configuration + Unknown.
+    Source         : int_customer_service_profile (DISTINCT).
+    Surrogate key  : service_profile_key (already computed in the
+                     intermediate via the same generate_surrogate_key).
 */
 
 with base as (
 
-    -- SELECT DISTINCT on the natural attribute set. This is safe here
-    -- because we've already proven the key is stable per configuration.
     select distinct
         service_profile_key,
         offer,
@@ -38,7 +28,8 @@ with base as (
         service_count,
         has_any_streaming_service,
         has_streaming_bundle,
-        has_security_bundle
+        has_security_bundle,
+        etl_source_system
     from {{ ref('int_customer_service_profile') }}
 
 ),
@@ -66,7 +57,8 @@ real_profiles as (
         has_streaming_bundle,
         has_security_bundle,
         false                                                 as is_unknown_member,
-        current_timestamp()                                   as dbt_loaded_at
+        etl_source_system,
+        {{ audit_columns() }}
     from base
 
 ),
@@ -94,7 +86,8 @@ unknown_member as (
         cast(null as boolean)                                 as has_streaming_bundle,
         cast(null as boolean)                                 as has_security_bundle,
         true                                                  as is_unknown_member,
-        current_timestamp()                                   as dbt_loaded_at
+        cast(null as string)                                  as etl_source_system,
+        {{ audit_columns() }}
 
 )
 

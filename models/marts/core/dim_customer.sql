@@ -1,20 +1,10 @@
 /*
     dim_customer
     ------------
-    Grain          : one row per customer (SCD Type 1).
+    Grain          : one row per customer + one Unknown member.
     Source         : int_customer_profile.
     Surrogate key  : dbt_utils.generate_surrogate_key(['customer_id']).
-    Unknown member : deterministic hash of the literal 'UNKNOWN'.
-
-    SCD strategy:
-      Chosen: Type 1 (overwrite in place on rebuild).
-      Rationale: Profiling confirmed customer demographic attributes are
-      stable between the current churn table and all monthly snapshots
-      (0 tenure or contract changes observed). SCD Type 2 machinery
-      (history + effective dates) would add complexity without capturing
-      real change events on this dataset. If future data shows demographic
-      churn, we can migrate this dim to SCD2 without changing its
-      customer_key hash contract.
+    SCD            : Type 1 (see README for rationale).
 */
 
 with base as (
@@ -30,8 +20,7 @@ with base as (
         first_join_month,
         current_tenure_months,
         current_tenure_band,
-        ingested_at,
-        ingestion_batch_id
+        etl_source_system
     from {{ ref('int_customer_profile') }}
 
 ),
@@ -50,9 +39,9 @@ real_customers as (
         first_join_month,
         current_tenure_months,
         current_tenure_band,
-        false                                       as is_unknown_member,
-        ingested_at                                 as created_at,
-        current_timestamp()                         as dbt_loaded_at
+        false                                                   as is_unknown_member,
+        etl_source_system,
+        {{ audit_columns() }}
     from base
 
 ),
@@ -72,8 +61,8 @@ unknown_member as (
         cast(null as int)                                     as current_tenure_months,
         cast('Unknown' as string)                             as current_tenure_band,
         true                                                  as is_unknown_member,
-        cast(null as timestamp)                               as created_at,
-        current_timestamp()                                   as dbt_loaded_at
+        cast(null as string)                                  as etl_source_system,
+        {{ audit_columns() }}
 
 )
 

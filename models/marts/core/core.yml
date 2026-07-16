@@ -84,9 +84,9 @@ models:
   - name: fct_customer_monthly_snapshot
     description: |
       One row per (customer, snapshot_month). Incremental with Delta
-      MERGE keyed on `customer_monthly_snapshot_key`. Watermark = max of
-      (source_updated_at, ingested_at) with a 2-day lookback to absorb
-      late-arriving updates.
+      MERGE keyed on `customer_monthly_snapshot_key`. Watermark =
+      source_updated_at with a 2-day lookback to absorb late-arriving
+      updates.
     columns:
       - name: customer_monthly_snapshot_key
         data_tests:

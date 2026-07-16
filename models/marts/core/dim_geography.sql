@@ -1,14 +1,10 @@
 /*
     dim_geography
     -------------
-    Grain          : one row per zip_code.
+    Grain          : one row per zip_code + one Unknown member.
     Source         : int_zipcode_geography.
     Surrogate key  : dbt_utils.generate_surrogate_key(['zip_code']).
-    Unknown member : geography_key = hash('UNKNOWN'), zip_code = 'UNKNOWN'.
-
-    Fields not available in the current source (populated as NULL):
-      state, region. Enrich via a seed if a ZIP -> state/region reference
-      becomes available.
+    Gaps           : state, region NULL - not in source.
 */
 
 with base as (
@@ -20,7 +16,8 @@ with base as (
         latitude,
         longitude,
         population,
-        is_population_valid
+        is_population_valid,
+        etl_source_system
     from {{ ref('int_zipcode_geography') }}
 
 ),
@@ -38,7 +35,8 @@ real_geography as (
         population,
         is_population_valid,
         false                               as is_unknown_member,
-        current_timestamp()                 as dbt_loaded_at
+        etl_source_system,
+        {{ audit_columns() }}
     from base
 
 ),
@@ -56,7 +54,8 @@ unknown_member as (
         cast(null as bigint)                                  as population,
         cast(null as boolean)                                 as is_population_valid,
         true                                                  as is_unknown_member,
-        current_timestamp()                                   as dbt_loaded_at
+        cast(null as string)                                  as etl_source_system,
+        {{ audit_columns() }}
 
 )
 

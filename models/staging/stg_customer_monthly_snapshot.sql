@@ -12,14 +12,9 @@
                       equivalent to one row per monthly_snapshot_id.
     Source          : {{ source('bronze', 'customer_monthly_snapshot') }}
     Business key    : monthly_snapshot_id
-                      (also unique: customer_id + snapshot_month)
-    Dedup ordering  : source_updated_at DESC, etl_ingested_at DESC,
-                      etl_file_row_number DESC.
-    Data-quality
-    findings        : 1,078 rows have monthly_charge < 0 (retained,
-                      flagged via is_monthly_charge_valid).
-                      snapshot_month is always first-of-month in source;
-                      we still apply date_trunc('month', ...) defensively.
+    Dedup ordering  : source `updated_at DESC` (primary) with Bronze
+                      etl_ingested_at / etl_file_row_number as tiebreakers.
+                      Bronze ETL columns are used INTERNALLY only.
 */
 
 with source as (
@@ -50,13 +45,9 @@ renamed as (
         nullif(trim(batch_id), '')                             as source_batch_id,
         nullif(trim(source_system), '')                        as source_system,
 
-        etl_ingested_at                                        as etl_ingested_at,
-        etl_source_system                                      as etl_source_system,
-        etl_run_id                                             as etl_run_id,
-        etl_job_id                                             as etl_job_id,
-        etl_task_name                                          as etl_task_name,
-        etl_source_file                                        as etl_source_file,
-        etl_file_row_number                                    as etl_file_row_number
+        etl_ingested_at                                        as _dedup_ingested_at,
+        etl_file_row_number                                    as _dedup_row_number,
+        etl_source_system                                      as etl_source_system
 
     from source
 
@@ -69,9 +60,9 @@ deduplicated as (
         row_number() over (
             partition by monthly_snapshot_id
             order by
-                source_updated_at    desc,
-                etl_ingested_at      desc,
-                etl_file_row_number  desc
+                source_updated_at   desc,
+                _dedup_ingested_at  desc,
+                _dedup_row_number   desc
         ) as _row_num
     from renamed r
 
@@ -92,16 +83,14 @@ final as (
         monthly_revenue,
         total_revenue,
 
-        -- monthly charge validity (negative charges are retained)
         case
             when monthly_charge is null then null
-            when monthly_charge >= 0 then true
+            when monthly_charge >= 0    then true
             else false
         end as is_monthly_charge_valid,
 
         customer_status,
 
-        -- status flags (mutually exclusive at snapshot level)
         case when customer_status = 'Churned' then true
              when customer_status is null     then null
              else false end                                    as is_churned,
@@ -119,13 +108,8 @@ final as (
         source_batch_id,
         source_system,
 
-        etl_ingested_at,
         etl_source_system,
-        etl_run_id,
-        etl_job_id,
-        etl_task_name,
-        etl_source_file,
-        etl_file_row_number
+        {{ audit_columns() }}
 
     from deduplicated
     where _row_num = 1
