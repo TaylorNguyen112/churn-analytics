@@ -29,6 +29,13 @@ on-run-start:
 # `+schema: silver` produces `workspace.silver` (not `workspace.silver_silver`).
 models:
   churn_analytics:
+    # Pin every model into Unity Catalog `workspace`. This is required in
+    # Databricks Workflows because the dbt task's auto-generated profile
+    # defaults `catalog` to `hive_metastore` (disabled on UC-enabled
+    # workspaces). Setting it at model config overrides the profile's
+    # catalog for every materialization and metadata lookup.
+    +catalog: "{{ env_var('DBT_CATALOG', 'workspace') }}"
+
     staging:
       +materialized: view
       +schema: silver
