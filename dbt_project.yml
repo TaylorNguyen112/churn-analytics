@@ -2,7 +2,7 @@ name: 'churn_analytics'
 version: '1.0.0'
 config-version: 2
 
-profile: 'churn_analytics'
+profile: 'databricks'
 
 model-paths: ["models"]
 analysis-paths: ["analyses"]
