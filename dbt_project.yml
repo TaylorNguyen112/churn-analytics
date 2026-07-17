@@ -16,28 +16,31 @@ clean-targets:
   - "dbt_packages"
 
 # Medallion layout in the `workspace` catalog:
-#   bronze  (sources)   -> silver (staging + intermediate) -> gold (marts)
+#   bronze              (raw sources, external)
+#   silver/staging      (clean, deduped, typed)
+#   silver/intermediate (reusable business entities)
+#   gold/dim            (conformed dimensions)
+#   gold/fact           (star-schema facts, incremental)
 #
-# Catalog is set outside dbt_project.yml:
-#   - Locally: profiles.yml `catalog: workspace`.
-#   - Databricks task: task-level "Warehouse catalog" field.
-#
-# Schema routing is authoritative here via `+schema: silver` and
-# `+schema: gold`, so per-model layer placement is independent of any
-# task's "Warehouse schema" default. macros/generate_schema_name.sql
-# maps these values directly (no `<target>_silver` suffix).
+# Catalog is set outside dbt_project.yml (local profile / task Warehouse
+# catalog). Schema routing is authoritative here via `+schema: silver`
+# and `+schema: gold`; macros/generate_schema_name.sql maps these values
+# directly (no `<target>_silver` suffixing).
 models:
   churn_analytics:
-    staging:
-      +materialized: view
+    silver:
       +schema: silver
-      +tags: ["silver", "staging"]
-    intermediate:
       +materialized: view
-      +schema: silver
-      +tags: ["silver", "intermediate"]
-    marts:
+      staging:
+        +tags: ["silver", "staging"]
+      intermediate:
+        +tags: ["silver", "intermediate"]
+    gold:
       +schema: gold
-      core:
+      dim:
         +materialized: table
-        +tags: ["gold", "core"]
+        +tags: ["gold", "dim"]
+      fact:
+        # Fact models set materialized='incremental' inline (unique_key
+        # differs per fact, so a folder default would be misleading).
+        +tags: ["gold", "fact"]

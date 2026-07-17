@@ -4,7 +4,7 @@
         incremental_strategy='merge',
         unique_key='customer_monthly_snapshot_key',
         on_schema_change='sync_all_columns',
-        tags=['gold', 'core', 'fact']
+        tags=['gold', 'fact']
     )
 }}
 
