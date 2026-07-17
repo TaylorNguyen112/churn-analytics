@@ -15,27 +15,19 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
-# Pin the active Unity Catalog for every dbt run.
-# Databricks Workflows' auto-generated profile has no `catalog` set, so
-# unqualified queries default to `hive_metastore` (which is disabled on
-# most Unity-Catalog-enabled workspaces). This hook makes the connection
-# switch to `workspace` before any model runs, matching local dev.
-on-run-start:
-  - "USE CATALOG {{ env_var('DBT_CATALOG', 'workspace') }}"
-
 # Medallion layout in the `workspace` catalog:
-#   bronze  (sources)     -> silver (staging + intermediate) -> gold (marts)
-# Schema routing is handled by macros/generate_schema_name.sql so that
-# `+schema: silver` produces `workspace.silver` (not `workspace.silver_silver`).
+#   bronze  (sources)   -> silver (staging + intermediate) -> gold (marts)
+#
+# Catalog is set outside dbt_project.yml:
+#   - Locally: profiles.yml `catalog: workspace`.
+#   - Databricks task: task-level "Warehouse catalog" field.
+#
+# Schema routing is authoritative here via `+schema: silver` and
+# `+schema: gold`, so per-model layer placement is independent of any
+# task's "Warehouse schema" default. macros/generate_schema_name.sql
+# maps these values directly (no `<target>_silver` suffix).
 models:
   churn_analytics:
-    # Pin every model into Unity Catalog `workspace`. This is required in
-    # Databricks Workflows because the dbt task's auto-generated profile
-    # defaults `catalog` to `hive_metastore` (disabled on UC-enabled
-    # workspaces). Setting it at model config overrides the profile's
-    # catalog for every materialization and metadata lookup.
-    +catalog: "{{ env_var('DBT_CATALOG', 'workspace') }}"
-
     staging:
       +materialized: view
       +schema: silver
