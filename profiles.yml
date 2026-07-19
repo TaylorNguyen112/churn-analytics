@@ -2,10 +2,20 @@
 # Secrets are read from environment variables so this file is safe to commit.
 # See .env.example for the variables to set.
 # Docs: https://docs.getdbt.com/docs/core/connect-data-platform/databricks-setup
+#
+# Targets:
+#   dev  - local development against the workspace (default).
+#   ci   - GitHub Actions pull-request CI. Writes to isolated schemas
+#          inside a dedicated CI Unity Catalog (workspace_ci). The
+#          per-run isolation is applied by macros/generate_schema_name.sql
+#          via the DBT_CI_SCHEMA_PREFIX env var.
+#   prod - GitHub Actions production deployment. Writes to the shared
+#          workspace catalog (silver + gold).
 
 local_databricks_cluster:
   target: dev
   outputs:
+
     dev:
       type: databricks
       host: "{{ env_var('DBT_DATABRICKS_HOST') }}"
@@ -16,3 +26,29 @@ local_databricks_cluster:
       catalog: "{{ env_var('DBT_CATALOG', 'workspace') }}"
       schema: "{{ env_var('DBT_SILVER_SCHEMA', 'silver') }}"
       threads: 4
+
+    ci:
+      type: databricks
+      host: "{{ env_var('DBT_DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}"
+      auth_type: oauth
+      client_id: "{{ env_var('DBT_DATABRICKS_CLIENT_ID') }}"
+      client_secret: "{{ env_var('DBT_DATABRICKS_CLIENT_SECRET') }}"
+      # CI catalog is separate from prod (workspace_ci vs workspace).
+      catalog: "{{ env_var('DBT_CATALOG', 'workspace_ci') }}"
+      # Fallback default schema for any model that omits `+schema` (none
+      # today). The medallion prefixing is applied at runtime by
+      # macros/generate_schema_name.sql when DBT_CI_SCHEMA_PREFIX is set.
+      schema: "{{ env_var('DBT_CI_DEFAULT_SCHEMA', 'ci_default') }}"
+      threads: 4
+
+    prod:
+      type: databricks
+      host: "{{ env_var('DBT_DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}"
+      auth_type: oauth
+      client_id: "{{ env_var('DBT_DATABRICKS_CLIENT_ID') }}"
+      client_secret: "{{ env_var('DBT_DATABRICKS_CLIENT_SECRET') }}"
+      catalog: "{{ env_var('DBT_CATALOG', 'workspace') }}"
+      schema: "{{ env_var('DBT_SILVER_SCHEMA', 'silver') }}"
+      threads: 8

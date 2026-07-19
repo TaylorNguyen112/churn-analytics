@@ -1,0 +1,4 @@
+# Pinned CI-only tooling. Not installed on the Databricks runtime.
+# Kept in a separate file so requirements.txt stays minimal.
+sqlfluff==3.4.2
+yamllint==1.37.1

@@ -1,0 +1,46 @@
+[sqlfluff]
+# Minimal Databricks-dialect config. Deliberately narrow so we don't
+# reformat the entire existing codebase on day one. Tighten later.
+dialect = databricks
+templater = jinja
+runaway_limit = 20
+max_line_length = 120
+large_file_skip_byte_limit = 0
+
+# Ignore templating + parsing errors that come from the jinja templater
+# not resolving dbt_utils macros without a live dbt connection.
+# Switch to the dbt templater or `sqlfluff-templater-dbt` when the
+# config is tightened.
+ignore = templating,parsing
+
+# Whitelisted rules only. Adding rules here is a deliberate decision.
+# LT01/LT02 (spacing/indent) intentionally excluded: the codebase uses
+# vertical alignment on `as` keywords which those rules would break.
+rules = LT12, CP01, CP03, AM01
+
+[sqlfluff:indentation]
+tab_space_size = 4
+indent_unit = space
+
+[sqlfluff:layout:type:comma]
+line_position = trailing
+
+[sqlfluff:templater:jinja]
+apply_dbt_builtins = True
+load_macros_from_path = ./macros
+
+# Values injected so env_var() calls resolve during static lint.
+[sqlfluff:templater:jinja:context]
+DBT_CATALOG = workspace
+DBT_BRONZE_SCHEMA = bronze
+DBT_SILVER_SCHEMA = silver
+DBT_GOLD_SCHEMA = gold
+DBT_ETL_JOB_ID = local
+DBT_ETL_RUN_ID = local
+DBT_ETL_TASK_NAME = manual
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower

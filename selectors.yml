@@ -1,0 +1,61 @@
+# Canonical dbt selectors used by CI/CD workflows.
+# Kept in-repo so the exact same selection is reproducible locally.
+#
+# Usage:
+#   dbt compile --selector smoke          --target prod
+#   dbt test    --selector critical_tests --target prod
+#   dbt build   --selector ci_build       --target ci
+
+selectors:
+
+  - name: smoke
+    description: |
+      Non-destructive canonical models used for post-deploy smoke
+      testing. Kept intentionally small: the two facts and the two
+      most-joined dimensions.
+    default: false
+    definition:
+      union:
+        - method: fqn
+          value: dim_customer
+        - method: fqn
+          value: dim_date
+        - method: fqn
+          value: fct_customer_monthly_snapshot
+        - method: fqn
+          value: fct_support_event
+
+  - name: critical_tests
+    description: |
+      The singular tests whose failure must block production deployment:
+      grain, fact-to-source reconciliation, and FK integrity on facts.
+      These are queried against deployed prod tables during smoke test.
+    default: false
+    definition:
+      union:
+        - method: fqn
+          value: assert_fact_foreign_keys_not_null
+        - method: fqn
+          value: assert_fact_customer_monthly_grain
+        - method: fqn
+          value: assert_fact_support_event_grain
+        - method: fqn
+          value: assert_customer_monthly_fact_reconciliation
+        - method: fqn
+          value: assert_support_fact_reconciliation
+
+  - name: ci_build
+    description: |
+      Full CI build fallback used when no production manifest is
+      available yet. Excludes fact incremental models so the first
+      bootstrap CI run stays fast; Slim CI is used on every subsequent
+      run once a production release has been published.
+    default: false
+    definition:
+      union:
+        - method: tag
+          value: staging
+        - method: tag
+          value: intermediate
+        - method: tag
+          value: dim

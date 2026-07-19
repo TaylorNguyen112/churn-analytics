@@ -1,0 +1,241 @@
+name: dbt PR CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'models/**'
+      - 'macros/**'
+      - 'tests/**'
+      - 'snapshots/**'
+      - 'seeds/**'
+      - 'analyses/**'
+      - 'dbt_project.yml'
+      - 'packages.yml'
+      - 'package-lock.yml'
+      - 'selectors.yml'
+      - 'profiles.yml'
+      - 'requirements.txt'
+      - 'requirements-ci.txt'
+      - 'scripts/ci/**'
+      - '.sqlfluff'
+      - '.github/workflows/dbt-pr-ci.yml'
+
+concurrency:
+  group: dbt-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  PYTHON_VERSION: '3.12'
+  DBT_PROFILES_DIR: ${{ github.workspace }}
+
+jobs:
+
+  # -----------------------------------------------------------------
+  # Job 1: static-checks
+  #
+  # Runs on every PR, including forks. No Databricks credentials used.
+  # Fails fast on YAML/shell/action lint, dbt parse, and (optionally)
+  # SQLFluff.
+  # -----------------------------------------------------------------
+  static-checks:
+    name: Static checks (no warehouse)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.txt
+
+      - name: Install dependencies
+        run: bash scripts/ci/install_dependencies.sh
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz
+          mkdir -p /tmp/actionlint
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp/actionlint
+          /tmp/actionlint/actionlint -version
+
+      - name: Lint GitHub Actions workflows (actionlint)
+        run: /tmp/actionlint/actionlint -config-file .github/actionlint.yaml
+
+      - name: Lint YAML (yamllint)
+        run: |
+          yamllint -d "{extends: default, rules: {line-length: disable, truthy: disable, document-start: disable, comments-indentation: disable, indentation: {spaces: consistent, indent-sequences: whatever}}}" \
+            models/ profiles.yml dbt_project.yml packages.yml selectors.yml
+
+      - name: Shellcheck
+        run: |
+          shopt -s globstar
+          shellcheck scripts/**/*.sh
+
+      - name: Python syntax check
+        run: python -m compileall -q scripts
+
+      - name: dbt deps
+        run: dbt deps
+
+      - name: dbt parse (placeholder credentials)
+        env:
+          DBT_DATABRICKS_HOST: placeholder.cloud.databricks.com
+          DBT_DATABRICKS_HTTP_PATH: /sql/1.0/warehouses/placeholder
+          DBT_DATABRICKS_CLIENT_ID: placeholder
+          DBT_DATABRICKS_CLIENT_SECRET: placeholder
+          DBT_CATALOG: workspace_ci
+          DBT_CI_SCHEMA_PREFIX: ci_pr_${{ github.event.pull_request.number }}
+        run: dbt parse --target ci
+
+      - name: SQLFluff (changed SQL only, non-blocking)
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=50 origin "${BASE_REF}"
+          CHANGED=$(git diff --name-only --diff-filter=ACMR \
+            "origin/${BASE_REF}...HEAD" -- \
+            'models/**/*.sql' 'macros/**/*.sql' 'tests/**/*.sql' | tr '\n' ' ' || true)
+          if [[ -z "${CHANGED// /}" ]]; then
+            echo "No changed SQL files."
+            exit 0
+          fi
+          echo "Linting: ${CHANGED}"
+          # shellcheck disable=SC2086
+          sqlfluff lint ${CHANGED}
+
+  # -----------------------------------------------------------------
+  # Job 2: dbt-ci
+  #
+  # Runs against the CI Databricks catalog. Uses the `ci` GitHub
+  # Environment. Skipped for forked PRs (no credentials exposure).
+  # -----------------------------------------------------------------
+  dbt-ci:
+    name: dbt CI (isolated schema)
+    needs: static-checks
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ci
+
+    env:
+      DBT_DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DBT_DATABRICKS_HTTP_PATH: ${{ vars.DBT_DATABRICKS_HTTP_PATH }}
+      DBT_DATABRICKS_CLIENT_ID: ${{ secrets.DBT_DATABRICKS_CLIENT_ID }}
+      DBT_DATABRICKS_CLIENT_SECRET: ${{ secrets.DBT_DATABRICKS_CLIENT_SECRET }}
+      DBT_CATALOG: ${{ vars.DBT_CATALOG }}
+      DBT_BRONZE_SCHEMA: ${{ vars.DBT_BRONZE_SCHEMA }}
+      DBT_SILVER_SCHEMA: ${{ vars.DBT_SILVER_SCHEMA }}
+      DBT_GOLD_SCHEMA: ${{ vars.DBT_GOLD_SCHEMA }}
+      APPROVED_CI_CATALOG: ${{ vars.APPROVED_CI_CATALOG }}
+      APPROVED_CI_PREFIX_REGEX: ${{ vars.APPROVED_CI_PREFIX_REGEX }}
+      DBT_CI_SCHEMA_PREFIX: ci_pr_${{ github.event.pull_request.number }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.txt
+
+      - name: Install dependencies
+        run: bash scripts/ci/install_dependencies.sh
+
+      - name: Validate CI environment (safety guard)
+        run: bash scripts/ci/validate_environment.sh
+
+      - name: dbt deps
+        run: dbt deps
+
+      - name: dbt parse
+        run: dbt parse --target ci
+
+      - name: dbt compile
+        run: dbt compile --target ci
+
+      - name: Download production manifest (Slim CI defer target)
+        id: prod_manifest
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/download_prod_manifest.sh
+
+      - name: Run dbt CI (Slim if manifest, else fallback)
+        run: bash scripts/ci/run_dbt_ci.sh
+
+      - name: dbt source freshness (best-effort)
+        continue-on-error: true
+        run: dbt source freshness --target ci
+
+      - name: Generate dbt docs (best-effort)
+        if: always()
+        continue-on-error: true
+        run: dbt docs generate --target ci
+
+      - name: Write GitHub job summary
+        if: always()
+        run: python scripts/ci/write_job_summary.py --context ci
+
+      - name: Upload dbt artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-ci-artifacts-pr-${{ github.event.pull_request.number }}
+          path: |
+            target/manifest.json
+            target/run_results.json
+            target/catalog.json
+            target/sources.json
+            target/graph_summary.json
+            target/compiled/**/*.sql
+            logs/dbt.log
+          retention-days: 14
+          if-no-files-found: warn
+
+  # -----------------------------------------------------------------
+  # Job 3: fork-notice
+  #
+  # Runs only for forked PRs. Publishes a short GitHub Actions summary
+  # explaining why the warehouse-touching job is skipped.
+  # -----------------------------------------------------------------
+  fork-notice:
+    name: Fork PR notice
+    needs: static-checks
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Post notice
+        run: |
+          {
+            echo "## Fork PR"
+            echo ""
+            echo "Warehouse-touching CI is skipped for pull requests from forked repositories."
+            echo "Only the **static-checks** job ran. A maintainer must re-run CI from a same-repo branch to validate against Databricks."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,131 @@
+name: Redeploy release
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Git ref (tag, branch, or 7-40 char commit SHA) to redeploy'
+        required: true
+        type: string
+      trigger_production_job:
+        description: 'Trigger the existing Databricks production Job after redeploy (default: false)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: telecom-churn-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PYTHON_VERSION: '3.12'
+  DBT_PROFILES_DIR: ${{ github.workspace }}
+
+jobs:
+
+  redeploy:
+    name: Redeploy ${{ inputs.git_ref }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    env:
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DBT_DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DBT_DATABRICKS_HTTP_PATH: ${{ vars.DBT_DATABRICKS_HTTP_PATH }}
+      DBT_DATABRICKS_CLIENT_ID: ${{ secrets.DBT_DATABRICKS_CLIENT_ID }}
+      DBT_DATABRICKS_CLIENT_SECRET: ${{ secrets.DBT_DATABRICKS_CLIENT_SECRET }}
+      DBT_CATALOG: ${{ vars.DBT_CATALOG }}
+      DBT_BRONZE_SCHEMA: ${{ vars.DBT_BRONZE_SCHEMA }}
+      DBT_SILVER_SCHEMA: ${{ vars.DBT_SILVER_SCHEMA }}
+      DBT_GOLD_SCHEMA: ${{ vars.DBT_GOLD_SCHEMA }}
+      DATABRICKS_PROD_JOB_ID: ${{ vars.DATABRICKS_PROD_JOB_ID }}
+
+    steps:
+      - name: Validate git ref format
+        env:
+          REF: ${{ inputs.git_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${REF}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::Invalid git ref: ${REF}"
+            exit 1
+          fi
+          echo "Redeploying ref: ${REF}"
+
+      - name: Checkout selected ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.txt
+
+      - name: Install dependencies
+        run: bash scripts/ci/install_dependencies.sh
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Refuse to deploy to a CI catalog
+        run: |
+          set -euo pipefail
+          case "${DBT_CATALOG}" in
+            workspace_ci*|*_ci|ci_*)
+              echo "::error::Refusing to redeploy to CI catalog '${DBT_CATALOG}'"
+              exit 1
+              ;;
+          esac
+
+      - name: dbt deps
+        run: dbt deps
+
+      - name: dbt parse (prod)
+        run: dbt parse --target prod
+
+      - name: dbt compile (prod)
+        run: dbt compile --target prod
+
+      - name: Databricks connectivity check
+        run: databricks current-user me --output json | jq '.userName'
+
+      - name: Run smoke test (non-destructive)
+        run: bash scripts/deploy/run_smoke_test.sh
+
+      - name: Upload redeploy artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-redeploy-artifacts-${{ inputs.git_ref }}
+          path: |
+            target/manifest.json
+            target/run_results.json
+            target/graph_summary.json
+            logs/dbt.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Optionally trigger existing Databricks production Job
+        if: ${{ inputs.trigger_production_job == true }}
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DBT_DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DBT_DATABRICKS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "${DATABRICKS_PROD_JOB_ID:-}" || { echo "::error::DATABRICKS_PROD_JOB_ID is not set."; exit 1; }
+          databricks jobs run-now "${DATABRICKS_PROD_JOB_ID}"
+
+      - name: Redeploy summary
+        if: always()
+        run: python scripts/ci/write_job_summary.py --context redeploy --tag "${{ inputs.git_ref }}"

@@ -1,0 +1,171 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'models/**'
+      - 'macros/**'
+      - 'tests/**'
+      - 'snapshots/**'
+      - 'seeds/**'
+      - 'analyses/**'
+      - 'dbt_project.yml'
+      - 'packages.yml'
+      - 'package-lock.yml'
+      - 'selectors.yml'
+      - 'profiles.yml'
+      - 'requirements.txt'
+      - '.github/workflows/deploy-production.yml'
+  workflow_dispatch:
+    inputs:
+      trigger_production_job:
+        description: 'Trigger the existing Databricks production Job after deploy (default: false)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: telecom-churn-production
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  PYTHON_VERSION: '3.12'
+  DBT_PROFILES_DIR: ${{ github.workspace }}
+
+jobs:
+
+  deploy:
+    name: Compile and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    env:
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DBT_DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DBT_DATABRICKS_HTTP_PATH: ${{ vars.DBT_DATABRICKS_HTTP_PATH }}
+      DBT_DATABRICKS_CLIENT_ID: ${{ secrets.DBT_DATABRICKS_CLIENT_ID }}
+      DBT_DATABRICKS_CLIENT_SECRET: ${{ secrets.DBT_DATABRICKS_CLIENT_SECRET }}
+      DBT_CATALOG: ${{ vars.DBT_CATALOG }}
+      DBT_BRONZE_SCHEMA: ${{ vars.DBT_BRONZE_SCHEMA }}
+      DBT_SILVER_SCHEMA: ${{ vars.DBT_SILVER_SCHEMA }}
+      DBT_GOLD_SCHEMA: ${{ vars.DBT_GOLD_SCHEMA }}
+      DATABRICKS_PROD_JOB_ID: ${{ vars.DATABRICKS_PROD_JOB_ID }}
+
+    outputs:
+      release_tag: ${{ steps.tag.outputs.tag }}
+
+    steps:
+      - name: Checkout deployed commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.txt
+
+      - name: Install dependencies
+        run: bash scripts/ci/install_dependencies.sh
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Refuse to deploy to a CI catalog
+        run: |
+          set -euo pipefail
+          test -n "${DBT_CATALOG}"            || { echo "::error::DBT_CATALOG missing";       exit 1; }
+          test -n "${DBT_DATABRICKS_HTTP_PATH}" || { echo "::error::DBT_DATABRICKS_HTTP_PATH missing"; exit 1; }
+          case "${DBT_CATALOG}" in
+            workspace_ci*|*_ci|ci_*)
+              echo "::error::Refusing to deploy to CI catalog '${DBT_CATALOG}'"
+              exit 1
+              ;;
+          esac
+          echo "Deploy target catalog: ${DBT_CATALOG}"
+
+      - name: dbt deps
+        run: dbt deps
+
+      - name: dbt parse (prod)
+        run: dbt parse --target prod
+
+      - name: dbt compile (prod)
+        run: dbt compile --target prod
+
+      - name: Databricks connectivity check
+        run: |
+          set -euo pipefail
+          databricks current-user me --output json | jq '.userName' || {
+            echo "::error::Databricks CLI could not authenticate. Check secrets on the production environment."
+            exit 1
+          }
+
+      - name: Compute release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          TAG="prod-$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
+
+      - name: Upload production dbt artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-prod-artifacts-${{ steps.tag.outputs.tag }}
+          path: |
+            target/manifest.json
+            target/run_results.json
+            target/graph_summary.json
+            target/compiled/**/*.sql
+            logs/dbt.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Create GitHub Release (durable manifest storage for Slim CI)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -f target/manifest.json || { echo "::error::manifest.json missing"; exit 1; }
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --target "${GITHUB_SHA}" \
+            --title "Production deploy ${{ steps.tag.outputs.tag }}" \
+            --notes "Automated production deploy for commit ${GITHUB_SHA}." \
+            target/manifest.json \
+            target/run_results.json
+
+      - name: Run smoke test (non-destructive)
+        run: bash scripts/deploy/run_smoke_test.sh
+
+      - name: Optionally trigger existing Databricks production Job
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.trigger_production_job == true }}
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DBT_DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DBT_DATABRICKS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "${DATABRICKS_PROD_JOB_ID:-}" || { echo "::error::DATABRICKS_PROD_JOB_ID variable is not set."; exit 1; }
+          RUN=$(databricks jobs run-now "${DATABRICKS_PROD_JOB_ID}" --output json)
+          echo "${RUN}"
+          {
+            echo "### Databricks production run triggered"
+            echo ""
+            echo "\`\`\`json"
+            echo "${RUN}"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deployment summary
+        if: always()
+        run: python scripts/ci/write_job_summary.py --context production --tag "${{ steps.tag.outputs.tag }}"

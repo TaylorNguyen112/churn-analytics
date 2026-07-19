@@ -4,6 +4,9 @@ dbt_packages/
 logs/
 .user.yml
 
+# CI scratch: production manifest downloaded during Slim CI runs
+prod-manifest/
+
 # Python virtual environments
 .venv/
 venv/

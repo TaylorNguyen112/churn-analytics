@@ -28,6 +28,8 @@ with two fact tables and five conformed dimensions.
 13. [Data-quality findings](#data-quality-findings)
 14. [Open business questions](#open-business-questions)
 15. [Security notes](#security-notes)
+16. [CI/CD](#cicd)
+17. [Contributing](#contributing)
 
 ## Architecture at a glance
 
@@ -524,3 +526,44 @@ Discovered during Bronze profiling and preserved through the pipeline:
 - The service principal's OAuth client secret should be **rotated** when engineers leave the project or if the secret was ever pasted in a chat/log. Databricks admin console → Service principals → `dbt-sp` → Secrets → Generate new secret; then update `.env`.
 - The Personal Access Token used in the earliest phase of this project (before switching to OAuth M2M) should be **revoked** in Databricks User Settings → Developer → Access tokens if it hasn't been already.
 - The service principal is scoped to `workspace.bronze` (read) + `workspace.silver` and `workspace.gold` (write). It has no access to other catalogs or schemas by default.
+
+## CI/CD
+
+GitHub Actions handles pull-request validation and production
+deployment. Databricks Workflows continue to own scheduled runs,
+retries, and operational monitoring.
+
+Four workflows live in `.github/workflows/`:
+
+- `dbt-pr-ci.yml` — pull-request validation in an isolated schema
+  (`ci_pr_<PR>_silver` / `ci_pr_<PR>_gold` inside the dedicated
+  `workspace_ci` catalog). Uses Slim CI (`state:modified+ --defer`)
+  when a production manifest is available, and falls back to the
+  `ci_build` selector when it is not.
+- `deploy-production.yml` — on merge to `main`, compiles the project
+  against `prod`, publishes a `prod-YYYYMMDD-HHMM-<sha>` GitHub Release
+  with the new `manifest.json`, and runs a non-destructive smoke test.
+- `cleanup-pr-schema.yml` — on PR close, drops the two CI schemas
+  associated with the PR.
+- `redeploy-release.yml` — manual `workflow_dispatch` that redeploys
+  any prior tag / branch / commit through the same production
+  environment approval.
+
+See [`docs/CI_CD.md`](docs/CI_CD.md) for the full architecture,
+required GitHub Secrets and Variables, rollback procedure, and
+interview demonstration script.
+
+## Contributing
+
+Branch naming, commit style, PR workflow, local test commands, and
+merge policy are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+Quick reference:
+
+- Branches use `<category>/<short-description>`. Categories:
+  `feat/`, `fix/`, `refactor/`, `perf/`, `docs/`, `test/`, `chore/`,
+  `ci/`, `build/`, `hotfix/`, `revert/`.
+- Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
+- `main` is protected. Every change is a pull request.
+- CI runs Slim dbt build in an isolated `ci_pr_<PR>` schema and blocks
+  merge on any error-severity failure.
